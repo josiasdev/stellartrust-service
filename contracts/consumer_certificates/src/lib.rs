@@ -31,3 +31,6 @@ impl ConsumerCertificates {
         client.verify(&doc_hash)
     }
 }
+
+#[cfg(test)]
+mod test;
