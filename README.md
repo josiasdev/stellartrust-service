@@ -22,7 +22,7 @@
 
 O **StellarTrust** é um serviço genérico e independente de domínio projetado para garantir a **integridade, autenticidade e rastreabilidade temporal** de registros digitais (diplomas, certificados de extensão, laudos técnicos, comprovantes de logística reversa, entre outros) sem expor dados sensíveis em cadeia pública.
 
-Em vez de armazenar documentos completos, o serviço registra o **hash criptográfico SHA-256** do artefato vinculado à identidade do emissor (`Address`) e ao domínio de negócio (`domain`) em um **Smart Contract escrito em Rust e compilado para WebAssembly (`wasm32-unknown-unknown`)** na blockchain **Stellar (Soroban)**.
+Em vez de armazenar documentos completos, o serviço registra o **hash criptográfico SHA-256** do artefato vinculado à identidade do emissor (`Address`) e ao domínio de negócio (`domain`) em um **Smart Contract escrito em Rust e compilado para WebAssembly (`wasm32v1-none`)** na blockchain **Stellar (Soroban)**.
 
 Para viabilizar tanto o reuso nativo em blockchain quanto a integração transparente com sistemas corporativos tradicionais (Web2), o projeto é dividido em duas camadas desacopladas:
 
@@ -50,7 +50,7 @@ Para viabilizar tanto o reuso nativo em blockchain quanto a integração transpa
                            ▼                                        ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │          CAMADA 1: CORE SERVICE ON-CHAIN (Soroban Smart Contract)            │
-│  • Artefato Binário: stellartrust.optimized.wasm (wasm32-unknown-unknown)    │
+│  • Artefato Binário: stellartrust.wasm (wasm32v1-none)                        │
 │  • Interface Pública: register(), verify(), revoke()                         │
 │  • Armazenamento Persistente Descentralizado (Ledger Storage + TTL)          │
 └──────────────────────────────────────────────────────────────────────────────┘
@@ -97,7 +97,7 @@ Certifique-se de ter as seguintes ferramentas instaladas:
 1. **Rust Toolchain** (versão 1.82 ou superior) e target WebAssembly:
    ```bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   rustup target add wasm32-unknown-unknown
+   rustup target add wasm32v1-none
    ```
 
 2. **Stellar CLI** (ferramenta oficial para compilação, otimização e deploy de contratos Soroban):
@@ -126,22 +126,18 @@ Certifique-se de ter as seguintes ferramentas instaladas:
 cargo test -p stellartrust
 ```
 
-### 2. Compilar e Otimizar o Binário WebAssembly (`.wasm`)
+### 2. Compilar o Binário WebAssembly (`.wasm`)
 ```bash
-# Compila o contrato para wasm32-unknown-unknown
+# Compila e otimiza o contrato para wasm32v1-none
 stellar contract build --package stellartrust
-
-# Otimiza o bytecode Wasm reduzindo tamanho e custo de execução (CPU/RAM na VM)
-stellar contract optimize \
-  --wasm target/wasm32-unknown-unknown/release/stellartrust.wasm
 ```
 O artefato final reutilizável será gerado em:
-`target/wasm32-unknown-unknown/release/stellartrust.optimized.wasm`
+`target/wasm32v1-none/release/stellartrust.wasm`
 
 ### 3. Realizar Deploy na Stellar Testnet
 ```bash
 stellar contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/stellartrust.optimized.wasm \
+  --wasm target/wasm32v1-none/release/stellartrust.wasm \
   --source-account alice \
   --network testnet
 ```
@@ -188,7 +184,7 @@ O contrato `contracts/consumer_certificates` importa diretamente a interface tip
 ```rust
 mod trust_service {
     soroban_sdk::contractimport!(
-        file = "../../target/wasm32-unknown-unknown/release/stellartrust.optimized.wasm"
+        file = "../../target/wasm32v1-none/release/stellartrust.wasm"
     );
 }
 ```
@@ -212,7 +208,7 @@ bash examples/demo_logistica_reversa.sh
 | :--- | :--- | :--- |
 | **Reuso** | *Service-Oriented Architecture (SOA)* | Encapsulamento da lógica de atestação em um serviço autônomo acessível por contratos padronizados. |
 | **Reuso** | *Interface-Based Design* | Contratos explícitos via tipos XDR no Soroban e especificação OpenAPI 3.0 no Gateway REST. |
-| **Reuso** | *Binary Component Reuse (Wasm)* | Exportação e importação direta do bytecode `stellartrust.optimized.wasm` entre contratos inteligentes. |
+| **Reuso** | *Binary Component Reuse (Wasm)* | Exportação e importação direta do bytecode `stellartrust.wasm` entre contratos inteligentes. |
 | **Resiliência** | *Circuit Breaker* | Monitoramento de falhas consecutivas na comunicação com o nó RPC da Stellar, abrindo o circuito para evitar *cascading failures*. |
 | **Resiliência** | *Retry com Exponential Backoff* | Re-tentativas automáticas com atraso exponencial para lidar com latências transitórias de consenso na Testnet. |
 | **Resiliência** | *Idempotência por Chave Única* | Prevenção de registros duplicados garantida deterministicamente pelo armazenamento persistente indexado por `doc_hash`. |
