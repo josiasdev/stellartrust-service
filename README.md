@@ -2,7 +2,7 @@
 
 > **Serviço Reutilizável Descentralizado de Atestação, Verificação e Revogação de Credenciais e Documentos Digitais**
 
-[![Rust](https://img.shields.io/badge/Rust-1.82%2B-orange?logo=rust)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.91%2B-orange?logo=rust)](https://www.rust-lang.org/)
 [![WebAssembly](https://img.shields.io/badge/WebAssembly-wasm32--unknown--unknown-654FF0?logo=webassembly)](https://webassembly.org/)
 [![Stellar Soroban](https://img.shields.io/badge/Stellar-Soroban_Smart_Contracts-black?logo=stellar)](https://developers.stellar.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)

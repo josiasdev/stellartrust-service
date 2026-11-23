@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "contracts/stellartrust",
+    "contracts/consumer_certificates",
+    "gateway-api",
+]
+
+[workspace.dependencies]
+soroban-sdk = "29"
+
+[profile.release]
+opt-level = "z"
+lto = true
+overflow-checks = true
