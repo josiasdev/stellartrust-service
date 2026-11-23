@@ -81,3 +81,6 @@ impl StellarTrust {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod test;
