@@ -26,10 +26,7 @@ fn issue_and_validate_certificate_cross_contract() {
         .expect("certificate should exist");
     assert_eq!(record.issuer, issuer);
     assert_eq!(record.doc_hash, hash);
-    assert_eq!(
-        record.domain,
-        String::from_str(&env, "ufc-certificates")
-    );
+    assert_eq!(record.domain, String::from_str(&env, "ufc-certificates"));
     assert!(!record.revoked);
 }
 
