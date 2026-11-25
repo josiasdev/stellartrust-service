@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use utoipa::{OpenApi, ToSchema};
 
 use crate::resilience::CircuitState;
-use crate::stellar_client::{AttestationRecordDto, StellarClientError, StellarGateway};
+use crate::stellar_client::{
+    AttestationRecordDto, AttestationTxMetadata, StellarClientError, StellarGateway,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -42,7 +44,7 @@ pub struct ErrorResponse {
 #[derive(OpenApi)]
 #[openapi(
     paths(register_attestation, verify_attestation, revoke_attestation, health),
-    components(schemas(RegisterAttestationRequest, RevokeAttestationRequest, HealthResponse, ErrorResponse, AttestationRecordDto, CircuitState)),
+    components(schemas(RegisterAttestationRequest, RevokeAttestationRequest, HealthResponse, ErrorResponse, AttestationRecordDto, AttestationTxMetadata, CircuitState)),
     tags((name = "stellartrust", description = "StellarTrust Gateway API"))
 )]
 pub struct ApiDoc;
@@ -51,6 +53,7 @@ fn map_error(err: StellarClientError) -> (StatusCode, Json<ErrorResponse>) {
     let (status, msg) = match &err {
         StellarClientError::InvalidDocHash => (StatusCode::BAD_REQUEST, err.to_string()),
         StellarClientError::AlreadyRegistered(_) => (StatusCode::CONFLICT, err.to_string()),
+        StellarClientError::AlreadyRevoked(_) => (StatusCode::CONFLICT, err.to_string()),
         StellarClientError::NotFound(_) => (StatusCode::NOT_FOUND, err.to_string()),
         StellarClientError::Unauthorized(_) => (StatusCode::FORBIDDEN, err.to_string()),
         StellarClientError::Transient(_) => (StatusCode::SERVICE_UNAVAILABLE, err.to_string()),
@@ -66,7 +69,7 @@ fn map_error(err: StellarClientError) -> (StatusCode, Json<ErrorResponse>) {
     path = "/api/v1/attestations",
     request_body = RegisterAttestationRequest,
     responses(
-        (status = 201, description = "Attestation registered"),
+        (status = 201, description = "Attestation registered", body = AttestationTxMetadata),
         (status = 400, body = ErrorResponse),
         (status = 409, body = ErrorResponse),
         (status = 502, body = ErrorResponse),
@@ -83,7 +86,7 @@ pub async fn register_attestation(
         .register(&payload.issuer, &payload.doc_hash, &payload.domain)
         .await
     {
-        Ok(()) => StatusCode::CREATED.into_response(),
+        Ok(metadata) => (StatusCode::CREATED, Json(metadata)).into_response(),
         Err(err) => map_error(err).into_response(),
     }
 }
@@ -128,6 +131,7 @@ pub async fn verify_attestation(
         (status = 400, body = ErrorResponse),
         (status = 403, body = ErrorResponse),
         (status = 404, body = ErrorResponse),
+        (status = 409, body = ErrorResponse),
         (status = 502, body = ErrorResponse),
         (status = 503, body = ErrorResponse),
     ),
@@ -171,10 +175,24 @@ mod tests {
 
     #[async_trait::async_trait]
     impl StellarGateway for MockGateway {
-        async fn register(&self, _issuer: &str, _doc_hash: &str, _domain: &str) -> Result<(), StellarClientError> {
-            Ok(())
+        async fn register(
+            &self,
+            issuer: &str,
+            doc_hash: &str,
+            domain: &str,
+        ) -> Result<AttestationTxMetadata, StellarClientError> {
+            Ok(AttestationTxMetadata {
+                issuer: issuer.to_string(),
+                doc_hash: doc_hash.to_string(),
+                domain: domain.to_string(),
+                status: "submitted".to_string(),
+                tx_hash: Some("a".repeat(64)),
+            })
         }
-        async fn verify(&self, doc_hash: &str) -> Result<Option<AttestationRecordDto>, StellarClientError> {
+        async fn verify(
+            &self,
+            doc_hash: &str,
+        ) -> Result<Option<AttestationRecordDto>, StellarClientError> {
             if doc_hash.starts_with("00") {
                 return Ok(None);
             }
@@ -193,20 +211,36 @@ mod tests {
 
     fn app() -> Router {
         let breaker = crate::resilience::CircuitBreaker::new(5, std::time::Duration::from_secs(30));
-        let state = AppState { gateway: Arc::new(MockGateway), breaker };
+        let state = AppState {
+            gateway: Arc::new(MockGateway),
+            breaker,
+        };
         Router::new()
             .route("/api/v1/attestations", post(register_attestation))
             .route("/api/v1/verify/{doc_hash}", get(verify_attestation))
-            .route("/api/v1/attestations/{doc_hash}/revoke", post(revoke_attestation))
+            .route(
+                "/api/v1/attestations/{doc_hash}/revoke",
+                post(revoke_attestation),
+            )
             .route("/health", get(health))
             .with_state(state)
     }
 
     #[tokio::test]
     async fn health_returns_closed_breaker() {
-        let res = app().oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap()).await.unwrap();
+        let res = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "ok");
         assert_eq!(json["circuit_breaker"], "Closed");
@@ -215,19 +249,34 @@ mod tests {
     #[tokio::test]
     async fn verify_returns_404_when_missing() {
         let hash = "00".repeat(32);
-        let res = app().oneshot(Request::builder().uri(format!("/api/v1/verify/{hash}")).body(Body::empty()).unwrap()).await.unwrap();
+        let res = app()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/verify/{hash}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn register_returns_201() {
         let hash = "11".repeat(32);
-        let body = serde_json::json!({"issuer":"GISSUER","doc_hash":hash,"domain":"ufc-certificates"});
-        let res = app().oneshot(
-            Request::builder().method("POST").uri("/api/v1/attestations")
-                .header("content-type","application/json")
-                .body(Body::from(body.to_string())).unwrap()
-        ).await.unwrap();
+        let body =
+            serde_json::json!({"issuer":"GISSUER","doc_hash":hash,"domain":"ufc-certificates"});
+        let res = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/attestations")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::CREATED);
     }
 }

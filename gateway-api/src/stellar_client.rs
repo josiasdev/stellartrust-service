@@ -16,6 +16,16 @@ pub struct AttestationRecordDto {
     pub revoked: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct AttestationTxMetadata {
+    pub issuer: String,
+    pub doc_hash: String,
+    pub domain: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct StellarConfig {
     pub rpc_url: String,
@@ -38,6 +48,8 @@ pub enum StellarClientError {
     Unauthorized(String),
     #[error("already registered: {0}")]
     AlreadyRegistered(String),
+    #[error("already revoked: {0}")]
+    AlreadyRevoked(String),
     #[error("unexpected output: {0}")]
     UnexpectedOutput(String),
 }
@@ -50,8 +62,16 @@ impl StellarClientError {
 
 #[async_trait]
 pub trait StellarGateway: Send + Sync {
-    async fn register(&self, issuer: &str, doc_hash: &str, domain: &str) -> Result<(), StellarClientError>;
-    async fn verify(&self, doc_hash: &str) -> Result<Option<AttestationRecordDto>, StellarClientError>;
+    async fn register(
+        &self,
+        issuer: &str,
+        doc_hash: &str,
+        domain: &str,
+    ) -> Result<AttestationTxMetadata, StellarClientError>;
+    async fn verify(
+        &self,
+        doc_hash: &str,
+    ) -> Result<Option<AttestationRecordDto>, StellarClientError>;
     async fn revoke(&self, issuer: &str, doc_hash: &str) -> Result<(), StellarClientError>;
 }
 
@@ -64,12 +84,18 @@ pub struct StellarCliClient {
 }
 
 impl StellarCliClient {
-    pub fn new(config: StellarConfig, breaker: CircuitBreaker, max_attempts: u32, base_delay: Duration) -> Self {
-        Self { config, breaker, max_attempts, base_delay }
-    }
-
-    pub fn breaker(&self) -> &CircuitBreaker {
-        &self.breaker
+    pub fn new(
+        config: StellarConfig,
+        breaker: CircuitBreaker,
+        max_attempts: u32,
+        base_delay: Duration,
+    ) -> Self {
+        Self {
+            config,
+            breaker,
+            max_attempts,
+            base_delay,
+        }
     }
 
     fn normalize_doc_hash(doc_hash: &str) -> Result<String, StellarClientError> {
@@ -80,12 +106,24 @@ impl StellarCliClient {
         Ok(h)
     }
 
+    fn extract_tx_hash(output: &str) -> Option<String> {
+        for token in output.split_whitespace() {
+            let cleaned = token.trim_matches(|c: char| !c.is_ascii_hexdigit());
+            if cleaned.len() == 64 && hex::decode(cleaned).is_ok() {
+                return Some(cleaned.to_lowercase());
+            }
+        }
+        None
+    }
+
     async fn run_cli(&self, args: &[String]) -> Result<String, StellarClientError> {
         let output = Command::new("stellar")
             .args(args)
             .output()
             .await
-            .map_err(|e| StellarClientError::Transient(format!("failed to execute stellar CLI: {e}")))?;
+            .map_err(|e| {
+                StellarClientError::Transient(format!("failed to execute stellar CLI: {e}"))
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -98,13 +136,22 @@ impl StellarCliClient {
         if lower.contains("alreadyregistered") || lower.contains("already registered") {
             return Err(StellarClientError::AlreadyRegistered(msg));
         }
+        if lower.contains("alreadyrevoked") || lower.contains("already revoked") {
+            return Err(StellarClientError::AlreadyRevoked(msg));
+        }
         if lower.contains("unauthorized") {
             return Err(StellarClientError::Unauthorized(msg));
         }
         if lower.contains("notfound") || lower.contains("not found") {
             return Err(StellarClientError::NotFound(msg));
         }
-        if lower.contains("timeout") || lower.contains("connection") || lower.contains("rpc") || lower.contains("unavailable") || lower.contains("503") || lower.contains("502") {
+        if lower.contains("timeout")
+            || lower.contains("connection")
+            || lower.contains("rpc")
+            || lower.contains("unavailable")
+            || lower.contains("503")
+            || lower.contains("502")
+        {
             return Err(StellarClientError::Transient(msg));
         }
         Err(StellarClientError::Cli(msg))
@@ -114,10 +161,14 @@ impl StellarCliClient {
         vec![
             "contract".into(),
             "invoke".into(),
-            "--id".into(), self.config.contract_id.clone(),
-            "--source-account".into(), self.config.source_account.clone(),
-            "--rpc-url".into(), self.config.rpc_url.clone(),
-            "--network-passphrase".into(), self.config.network_passphrase.clone(),
+            "--id".into(),
+            self.config.contract_id.clone(),
+            "--source-account".into(),
+            self.config.source_account.clone(),
+            "--rpc-url".into(),
+            self.config.rpc_url.clone(),
+            "--network-passphrase".into(),
+            self.config.network_passphrase.clone(),
             "--".into(),
         ]
     }
@@ -150,25 +201,55 @@ impl StellarCliClient {
 
 #[async_trait]
 impl StellarGateway for StellarCliClient {
-    async fn register(&self, issuer: &str, doc_hash: &str, domain: &str) -> Result<(), StellarClientError> {
+    async fn register(
+        &self,
+        issuer: &str,
+        doc_hash: &str,
+        domain: &str,
+    ) -> Result<AttestationTxMetadata, StellarClientError> {
         let hash = Self::normalize_doc_hash(doc_hash)?;
         let mut args = self.base_args();
-        args.extend(["register".into(), "--issuer".into(), issuer.into(), "--doc_hash".into(), hash, "--domain".into(), domain.into()]);
-        self.invoke(args).await?;
-        Ok(())
+        args.extend([
+            "register".into(),
+            "--issuer".into(),
+            issuer.into(),
+            "--doc_hash".into(),
+            hash.clone(),
+            "--domain".into(),
+            domain.into(),
+        ]);
+        let out = self.invoke(args).await?;
+        let tx_hash = Self::extract_tx_hash(&out);
+        Ok(AttestationTxMetadata {
+            issuer: issuer.to_string(),
+            doc_hash: hash,
+            domain: domain.to_string(),
+            status: "submitted".to_string(),
+            tx_hash,
+        })
     }
 
-    async fn verify(&self, doc_hash: &str) -> Result<Option<AttestationRecordDto>, StellarClientError> {
+    async fn verify(
+        &self,
+        doc_hash: &str,
+    ) -> Result<Option<AttestationRecordDto>, StellarClientError> {
         let hash = Self::normalize_doc_hash(doc_hash)?;
         let args = vec![
-            "contract".into(), "invoke".into(),
-            "--id".into(), self.config.contract_id.clone(),
-            "--source-account".into(), self.config.source_account.clone(),
-            "--rpc-url".into(), self.config.rpc_url.clone(),
-            "--network-passphrase".into(), self.config.network_passphrase.clone(),
+            "contract".into(),
+            "invoke".into(),
+            "--id".into(),
+            self.config.contract_id.clone(),
+            "--source-account".into(),
+            self.config.source_account.clone(),
+            "--rpc-url".into(),
+            self.config.rpc_url.clone(),
+            "--network-passphrase".into(),
+            self.config.network_passphrase.clone(),
             "--send=no".into(),
             "--".into(),
-            "verify".into(), "--doc_hash".into(), hash,
+            "verify".into(),
+            "--doc_hash".into(),
+            hash,
         ];
         let out = self.invoke(args).await?;
         let out = out.trim();
@@ -186,11 +267,29 @@ impl StellarGateway for StellarCliClient {
             }
             if let Some(obj) = value.as_object() {
                 let dto = AttestationRecordDto {
-                    issuer: obj.get("issuer").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    doc_hash: obj.get("doc_hash").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    domain: obj.get("domain").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    timestamp: obj.get("timestamp").and_then(|v| v.as_u64()).unwrap_or_default(),
-                    revoked: obj.get("revoked").and_then(|v| v.as_bool()).unwrap_or_default(),
+                    issuer: obj
+                        .get("issuer")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    doc_hash: obj
+                        .get("doc_hash")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    domain: obj
+                        .get("domain")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    timestamp: obj
+                        .get("timestamp")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or_default(),
+                    revoked: obj
+                        .get("revoked")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or_default(),
                 };
                 return Ok(Some(dto));
             }
@@ -201,7 +300,13 @@ impl StellarGateway for StellarCliClient {
     async fn revoke(&self, issuer: &str, doc_hash: &str) -> Result<(), StellarClientError> {
         let hash = Self::normalize_doc_hash(doc_hash)?;
         let mut args = self.base_args();
-        args.extend(["revoke".into(), "--issuer".into(), issuer.into(), "--doc_hash".into(), hash]);
+        args.extend([
+            "revoke".into(),
+            "--issuer".into(),
+            issuer.into(),
+            "--doc_hash".into(),
+            hash,
+        ]);
         self.invoke(args).await?;
         Ok(())
     }

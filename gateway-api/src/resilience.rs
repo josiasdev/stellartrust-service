@@ -17,6 +17,7 @@ struct CircuitBreakerInner {
     state: CircuitState,
     consecutive_failures: u32,
     opened_at: Option<Instant>,
+    probe_in_flight: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +34,7 @@ impl CircuitBreaker {
                 state: CircuitState::Closed,
                 consecutive_failures: 0,
                 opened_at: None,
+                probe_in_flight: false,
             })),
             failure_threshold: failure_threshold.max(1),
             open_timeout,
@@ -52,8 +54,10 @@ impl CircuitBreaker {
             CircuitState::Closed => true,
             CircuitState::Open => false,
             CircuitState::HalfOpen => {
-                // Allow a single probe: move to Open-like guard by keeping HalfOpen
-                // but callers use can_execute as gate; we allow and rely on record_*.
+                if inner.probe_in_flight {
+                    return false;
+                }
+                inner.probe_in_flight = true;
                 true
             }
         }
@@ -64,6 +68,7 @@ impl CircuitBreaker {
         inner.state = CircuitState::Closed;
         inner.consecutive_failures = 0;
         inner.opened_at = None;
+        inner.probe_in_flight = false;
     }
 
     pub fn record_failure(&self) {
@@ -91,6 +96,7 @@ impl CircuitBreaker {
     fn open(&self, inner: &mut CircuitBreakerInner) {
         inner.state = CircuitState::Open;
         inner.opened_at = Some(Instant::now());
+        inner.probe_in_flight = false;
     }
 }
 
@@ -125,7 +131,12 @@ where
                 if !transient || attempt + 1 == attempts {
                     break;
                 }
-                tokio::time::sleep(delay).await;
+                let jitter_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_millis() as u64
+                    % (delay.as_millis() as u64 / 2 + 1);
+                tokio::time::sleep(delay + Duration::from_millis(jitter_ms)).await;
                 delay = delay.saturating_mul(2);
             }
         }
@@ -185,6 +196,18 @@ mod tests {
         assert!(cb.can_execute());
         cb.record_success();
         assert_eq!(cb.state(), CircuitState::Closed);
+    }
+
+    #[test]
+    fn circuit_half_open_allows_single_probe() {
+        let cb = CircuitBreaker::new(1, Duration::from_millis(10));
+        cb.record_failure();
+        std::thread::sleep(Duration::from_millis(15));
+        assert_eq!(cb.state(), CircuitState::HalfOpen);
+        assert!(cb.can_execute());
+        assert!(!cb.can_execute());
+        cb.record_failure();
+        assert_eq!(cb.state(), CircuitState::Open);
     }
 
     #[tokio::test]
