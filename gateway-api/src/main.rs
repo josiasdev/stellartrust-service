@@ -13,7 +13,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::handlers::{health, register_attestation, revoke_attestation, verify_attestation, ApiDoc, AppState};
+use crate::handlers::{
+    health, register_attestation, revoke_attestation, verify_attestation, ApiDoc, AppState,
+};
 use crate::resilience::CircuitBreaker;
 use crate::stellar_client::{StellarCliClient, StellarConfig};
 
