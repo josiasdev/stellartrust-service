@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Demo: reuso do gateway-api — domínio "ufc-certificados" (Certificados acadêmicos).
+# Demo: reuso do gateway-api — domínio "UFC-QUIXADA-EXTENSAO" (Certificados acadêmicos).
 # Fluxo: registro -> verificação positiva -> revogação -> verificação revogada.
 
 set -euo pipefail
@@ -17,9 +17,9 @@ command -v jq   >/dev/null || { echo "ERRO: jq não encontrado." >&2; exit 1; }
 
 # Hash determinístico por execução (payload inclui timestamp para evitar 409 em reexecuções).
 TIMESTAMP="$(date +%s)"
-PAYLOAD="ufc-certificados|certificado-extensao|aluno:josias-batista|$TIMESTAMP"
+PAYLOAD="UFC-QUIXADA-EXTENSAO|certificado-extensao|aluno:josias-batista|$TIMESTAMP"
 DOC_HASH="$(printf '%s' "$PAYLOAD" | sha256sum | awk '{print $1}')"
-DOMAIN="ufc-certificados"
+DOMAIN="UFC-QUIXADA-EXTENSAO"
 
 echo "=== Domínio: $DOMAIN ==="
 echo "Payload:   $PAYLOAD"
@@ -48,7 +48,7 @@ echo "HTTP $HTTP_STATUS"
 if [[ "$HTTP_STATUS" != "200" ]]; then
   cat /tmp/opencode/ufc_verify1.json; echo; exit 1
 fi
-jq -e '.revoked == false and .domain == "ufc-certificados"' /tmp/opencode/ufc_verify1.json >/dev/null
+jq -e '.revoked == false and .domain == "UFC-QUIXADA-EXTENSAO"' /tmp/opencode/ufc_verify1.json >/dev/null
 echo "Revogado? $(jq -r '.revoked' /tmp/opencode/ufc_verify1.json)"
 echo "Timestamp: $(jq -r '.timestamp' /tmp/opencode/ufc_verify1.json)"
 echo "OK"

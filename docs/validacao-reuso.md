@@ -48,7 +48,7 @@ Ambos devem terminar com `=== ... concluído com sucesso ===`.
 
 - [ ] Os dois cenários usam o mesmo `BASE_URL` e a mesma instância do gateway.
 - [ ] Nenhum código de `gateway-api/` ou `contracts/` foi alterado para suportar um domínio específico.
-- [ ] Os domínios (`ufc-certificados` e `logistica-reversa`) coexistem sem colisão: hashes distintos ⇒ registros independentes.
+- [ ] Os domínios (`UFC-QUIXADA-EXTENSAO` e `RASTREABILIDADE-RESIDUOS`) coexistem sem colisão: hashes distintos ⇒ registros independentes.
 - [ ] Reexecutar um script com o mesmo payload resulta em `409 AlreadyRegistered` (idempotência por `doc_hash`), documentado como comportamento esperado.
 - [ ] A revogação de um domínio não afeta o estado de outro domínio.
 
