@@ -28,7 +28,7 @@ fn register_and_verify() {
     assert_eq!(record.issuer, issuer);
     assert_eq!(record.doc_hash, hash);
     assert_eq!(record.domain, domain);
-    assert_eq!(record.revoked, false);
+    assert!(!record.revoked);
     assert_eq!(record.timestamp, env.ledger().timestamp());
 }
 
@@ -84,4 +84,19 @@ fn unauthorized_revoke_fails() {
     client.register(&issuer, &hash, &domain);
     let err = client.try_revoke(&other, &hash);
     assert_eq!(err, Err(Ok(ContractError::Unauthorized)));
+}
+
+#[test]
+fn duplicate_revoke_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_id, client) = setup(&env);
+    let issuer = Address::generate(&env);
+    let hash = doc_hash(&env, 5);
+    let domain = String::from_str(&env, "ufc-certificados");
+
+    client.register(&issuer, &hash, &domain);
+    client.revoke(&issuer, &hash);
+    let err = client.try_revoke(&issuer, &hash);
+    assert_eq!(err, Err(Ok(ContractError::AlreadyRevoked)));
 }

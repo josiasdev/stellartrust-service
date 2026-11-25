@@ -1,6 +1,9 @@
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractevent, contractimpl, contracttype, Address, BytesN, Env,
+    String,
+};
 
 const TTL_THRESHOLD: u32 = 518_400;
 const TTL_EXTEND_TO: u32 = 1_036_800;
@@ -12,6 +15,7 @@ pub enum ContractError {
     AlreadyRegistered = 1,
     NotFound = 2,
     Unauthorized = 3,
+    AlreadyRevoked = 4,
 }
 
 #[contracttype]
@@ -22,6 +26,27 @@ pub struct AttestationRecord {
     pub domain: String,
     pub timestamp: u64,
     pub revoked: bool,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisteredEvent {
+    #[topic]
+    pub issuer: Address,
+    #[topic]
+    pub doc_hash: BytesN<32>,
+    pub domain: String,
+    pub timestamp: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RevokedEvent {
+    #[topic]
+    pub issuer: Address,
+    #[topic]
+    pub doc_hash: BytesN<32>,
+    pub timestamp: u64,
 }
 
 #[contract]
@@ -50,6 +75,13 @@ impl StellarTrust {
         env.storage()
             .persistent()
             .extend_ttl(&doc_hash, TTL_THRESHOLD, TTL_EXTEND_TO);
+        RegisteredEvent {
+            issuer: record.issuer.clone(),
+            doc_hash: doc_hash.clone(),
+            domain: record.domain.clone(),
+            timestamp: record.timestamp,
+        }
+        .publish(&env);
         Ok(())
     }
 
@@ -73,11 +105,20 @@ impl StellarTrust {
         if record.issuer != issuer {
             return Err(ContractError::Unauthorized);
         }
+        if record.revoked {
+            return Err(ContractError::AlreadyRevoked);
+        }
         record.revoked = true;
         env.storage().persistent().set(&doc_hash, &record);
         env.storage()
             .persistent()
             .extend_ttl(&doc_hash, TTL_THRESHOLD, TTL_EXTEND_TO);
+        RevokedEvent {
+            issuer: record.issuer.clone(),
+            doc_hash: doc_hash.clone(),
+            timestamp: record.timestamp,
+        }
+        .publish(&env);
         Ok(())
     }
 }
