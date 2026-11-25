@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Demo: reuso do gateway-api — domínio "logistica-reversa" (Rastreabilidade de lotes).
+# Demo: reuso do gateway-api — domínio "RASTREABILIDADE-RESIDUOS" (Rastreabilidade de lotes).
 # Fluxo: registro -> verificação positiva -> revogação -> verificação revogada.
 
 set -euo pipefail
@@ -16,9 +16,9 @@ command -v curl >/dev/null || { echo "ERRO: curl não encontrado." >&2; exit 1; 
 command -v jq   >/dev/null || { echo "ERRO: jq não encontrado." >&2; exit 1; }
 
 TIMESTAMP="$(date +%s)"
-PAYLOAD="logistica-reversa|lote-residuos|lote:LR-2026-0042|peso:1250kg|$TIMESTAMP"
+PAYLOAD="RASTREABILIDADE-RESIDUOS|lote-residuos|lote:LR-2026-0042|peso:1250kg|$TIMESTAMP"
 DOC_HASH="$(printf '%s' "$PAYLOAD" | sha256sum | awk '{print $1}')"
-DOMAIN="logistica-reversa"
+DOMAIN="RASTREABILIDADE-RESIDUOS"
 
 echo "=== Domínio: $DOMAIN ==="
 echo "Payload:   $PAYLOAD"
@@ -45,7 +45,7 @@ echo "HTTP $HTTP_STATUS"
 if [[ "$HTTP_STATUS" != "200" ]]; then
   cat /tmp/opencode/lr_verify1.json; echo; exit 1
 fi
-jq -e '.revoked == false and .domain == "logistica-reversa"' /tmp/opencode/lr_verify1.json >/dev/null
+jq -e '.revoked == false and .domain == "RASTREABILIDADE-RESIDUOS"' /tmp/opencode/lr_verify1.json >/dev/null
 echo "Revogado? $(jq -r '.revoked' /tmp/opencode/lr_verify1.json)"
 echo "OK"
 echo
